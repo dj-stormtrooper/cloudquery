@@ -56,12 +56,6 @@ func CreateClient(ctx context.Context, configPath string, allowDefaultConfig boo
 		}
 	}
 
-	if configMutator != nil {
-		if err := configMutator(cfg); err != nil {
-			return nil, err
-		}
-	}
-
 	setConfigAnalytics(cfg)
 	return CreateClientFromConfig(ctx, cfg, instanceId)
 }

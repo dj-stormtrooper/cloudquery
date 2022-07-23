@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudquery/cloudquery/cmd/flags"
 	"github.com/cloudquery/cloudquery/cmd/utils"
 	"github.com/cloudquery/cloudquery/internal/analytics"
 	"github.com/cloudquery/cloudquery/pkg/core"
@@ -14,39 +15,27 @@ import (
 	"github.com/cloudquery/cq-provider-sdk/helpers/limit"
 	"github.com/getsentry/sentry-go"
 	zerolog "github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
-
-func registerSentryFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().Bool("debug-sentry", false, "enable Sentry debug mode")
-	cmd.PersistentFlags().String("sentry-dsn", "https://5ff9e378a79d4ba2821f540b036286e9@o912044.ingest.sentry.io/6106324", "Sentry DSN")
-
-	_ = cmd.PersistentFlags().MarkHidden("debug-sentry")
-	_ = cmd.PersistentFlags().MarkHidden("sentry-dsn")
-
-	_ = viper.BindPFlag("debug-sentry", cmd.PersistentFlags().Lookup("debug-sentry"))
-	_ = viper.BindPFlag("sentry-dsn", cmd.PersistentFlags().Lookup("sentry-dsn"))
-}
 
 func initSentry() {
 	sentrySyncTransport := sentry.NewHTTPSyncTransport()
 	sentrySyncTransport.Timeout = time.Second * 2
 
-	dsn := viper.GetString("sentry-dsn")
-	if viper.GetBool("no-telemetry") {
+	dsn := viper.GetString(flags.SentryDSN)
+	if viper.GetBool(flags.NoTelemetry) {
 		dsn = "" // "To drop all events, set the DSN to the empty string."
 	}
-	if core.Version == core.DevelopmentVersion && !viper.GetBool("debug-sentry") {
+	if core.Version == core.DevelopmentVersion && !viper.GetBool(flags.SentryDebug) {
 		dsn = "" // Disable Sentry in development mode, unless debug-sentry was enabled
 	}
 	userId := analytics.GetCookieId()
-	if analytics.CQTeamID == userId.String() && !viper.GetBool("debug-sentry") {
+	if analytics.CQTeamID == userId.String() && !viper.GetBool(flags.SentryDebug) {
 		dsn = ""
 	}
 
 	if err := sentry.Init(sentry.ClientOptions{
-		Debug:     viper.GetBool("debug-sentry"),
+		Debug:     viper.GetBool(flags.SentryDebug),
 		Dsn:       dsn,
 		Transport: sentrySyncTransport,
 		Environment: func() string {

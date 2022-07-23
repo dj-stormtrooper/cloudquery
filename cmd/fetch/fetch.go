@@ -2,17 +2,18 @@ package fetch
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/cloudquery/cloudquery/cmd/utils"
 	"github.com/cloudquery/cloudquery/internal/analytics"
-	"github.com/cloudquery/cloudquery/pkg/config"
+	"github.com/cloudquery/cloudquery/internal/firebase"
 	"github.com/cloudquery/cloudquery/pkg/core"
 	"github.com/cloudquery/cloudquery/pkg/errors"
+	"github.com/cloudquery/cloudquery/pkg/plugin"
 	"github.com/cloudquery/cloudquery/pkg/plugin/registry"
+	"github.com/cloudquery/cloudquery/pkg/ui"
 	"github.com/cloudquery/cloudquery/pkg/ui/console"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
+	"github.com/vbauerster/mpb/v6/decor"
 )
 
 const (
@@ -47,8 +48,7 @@ func NewCmdFetch() *cobra.Command {
 		Long:    fetchLong,
 		Example: fetchExample,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfgMutator := filterConfigProviders(args)
-			c, err := console.CreateClient(cmd.Context(), utils.GetConfigFile(), false, cfgMutator, utils.InstanceId)
+			c, err := console.CreateClient(cmd.Context(), utils.GetConfigFile(), false, nil, utils.InstanceId)
 			if err != nil {
 				return err
 			}
@@ -66,90 +66,26 @@ func NewCmdFetch() *cobra.Command {
 			return nil
 		},
 	}
-	fetchCmd.Flags().Bool("skip-schema-upgrade", false, "skip schema upgrade of provider fetch, disabling this flag might cause issues")
-	_ = viper.BindPFlag("skip-schema-upgrade", fetchCmd.Flags().Lookup("skip-schema-upgrade"))
-	fetchCmd.Flags().Bool("redact-diags", false, "show redacted diagnostics only")
-	_ = viper.BindPFlag("redact-diags", fetchCmd.Flags().Lookup("redact-diags"))
-	_ = fetchCmd.Flags().MarkHidden("redact-diags")
+
 	return fetchCmd
 }
 
-// filterConfigProviders gets a list of "providerAlias:resource1,resource2" items and updates the given config, removing non-matching providers
-// valid usages:
-// "aws" or "aws:*" (all resources specified in the config)
-// "aws:ec2.instances,s3.buckets" (only ec2.instances and s3.buckets)
-func filterConfigProviders(list []string) func(*config.Config) error {
-	return func(cfg *config.Config) error {
-		if len(list) == 0 || cfg == nil || len(cfg.Providers) == 0 || len(cfg.CloudQuery.Providers) == 0 {
-			return nil
-		}
+func fetch(cmd *cobra.Command, args []string) error {
+	var progressUpdater ui.Progress
 
-		pMap := make(map[string][]string, len(list)) // provider vs resources
-		for _, item := range list {
-			parts := strings.SplitN(item, ":", 2)
-			prov := parts[0]
-			if len(parts) == 2 && parts[1] != "*" {
-				resources := strings.Split(parts[1], ",")
-				pMap[prov] = make([]string, len(resources))
-				copy(pMap[prov], resources)
-			} else {
-				pMap[prov] = nil
-			}
-		}
-
-		requiredProviders := make(map[string]struct{})
-		for i, p := range cfg.Providers {
-			var (
-				resList []string
-				ok      bool
-			)
-
-			if p.Alias != "" {
-				resList, ok = pMap[p.Alias]
-			} else {
-				resList, ok = pMap[p.Name]
-			}
-			if !ok {
-				cfg.Providers[i] = nil
-				continue
-			}
-
-			requiredProviders[p.Name] = struct{}{}
-
-			if len(resList) > 0 {
-				cfg.Providers[i].Resources = resList
-			}
-		}
-
-		// Remove non-required providers and zero unused pointers afterwards
-		{
-			i := 0
-			for _, p := range cfg.CloudQuery.Providers {
-				if _, ok := requiredProviders[p.Name]; ok {
-					cfg.CloudQuery.Providers[i] = p
-					i++
-				}
-			}
-			for j := i; j < len(cfg.CloudQuery.Providers); j++ {
-				cfg.CloudQuery.Providers[j] = nil
-			}
-			cfg.CloudQuery.Providers = cfg.CloudQuery.Providers[:i]
-		}
-		{
-			i := 0
-			for _, p := range cfg.Providers {
-				if p != nil {
-					cfg.Providers[i] = p
-					i++
-				}
-			}
-			cfg.Providers = cfg.Providers[:i]
-		}
-
-		if len(cfg.CloudQuery.Providers) == 0 || len(cfg.Providers) == 0 {
-			return fmt.Errorf("nothing to fetch")
-		}
-
-		return nil
+	if ui.DoProgress() {
+		progressUpdater = console.NewProgress(cmd.Context(), func(o *console.ProgressOptions) {
+			o.AppendDecorators = []decor.Decorator{decor.Percentage()}
+		})
 	}
+
+	hub := registry.NewRegistryHub(
+		firebase.CloudQueryRegistryURL,
+		registry.WithPluginDirectory(cfg.CloudQuery.PluginDirectory),
+		registry.WithProgress(progressUpdater))
+	pm, err := plugin.NewManager(hub, plugin.WithAllowReattach())
+	if err != nil {
+		return err
+	}
+	return nil
 }

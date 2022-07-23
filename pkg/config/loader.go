@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/cloudquery/cq-provider-sdk/provider/diag"
 	"github.com/hairyhenderson/go-fsimpl"
 	"github.com/hairyhenderson/go-fsimpl/blobfs"
 	"github.com/hairyhenderson/go-fsimpl/filefs"
@@ -73,23 +72,13 @@ func (p *Parser) getVariableValue(s string) string {
 }
 
 // LoadFile is a low-level method that reads the file at the given path
-func (p *Parser) LoadFile(path string) ([]byte, diag.Diagnostics) {
+func (p *Parser) LoadFile(path string) ([]byte, error) {
 	var contents []byte
 	// Example of path supported paths:
 	// `./local/relative/path/to/config.yml`
 	// `/absolute/path/to/config.yml`
 	// `s3://object/in/remote/location/absolute/path/to/config.yml`
 	sanitizedPath, err := url.Parse(path)
-	if err != nil {
-		return nil, diag.FromError(err, diag.USER, diag.WithSummary("Failed to load config file: invalid path"), diag.WithDetails("The file %q could not be read", path))
-	}
-
-	if sanitizedPath.Scheme == "" {
-		contents, err = p.fs.ReadFile(path)
-	} else {
-		contents, err = loadRemoteFile(path)
-	}
-
 	if err != nil {
 		if e, ok := err.(*fs.PathError); ok {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -98,10 +87,17 @@ func (p *Parser) LoadFile(path string) ([]byte, diag.Diagnostics) {
 				err = fmt.Errorf(e.Err.Error())
 			}
 		}
-		return nil, diag.FromError(err, diag.USER, diag.WithSummary("Failed to read file"), diag.WithDetails("The file %q could not be read", path))
+		return nil, fmt.Errorf("failed to parse path %s: %w", path, err)
 	}
+
+	if sanitizedPath.Scheme == "" {
+		contents, err = p.fs.ReadFile(path)
+	} else {
+		contents, err = loadRemoteFile(path)
+	}
+
 	if len(contents) == 0 {
-		return nil, diag.FromError(err, diag.USER, diag.WithSummary("Failed to read file"), diag.WithDetails("The file %q is empty", path))
+		return nil, fmt.Errorf("file %s is empty", path)
 	}
 
 	return contents, nil

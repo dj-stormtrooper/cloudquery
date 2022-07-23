@@ -3,7 +3,6 @@ package config
 import (
 	"bytes"
 	_ "embed"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -22,7 +21,7 @@ import (
 //go:embed schema.json
 var configSchemaYAML []byte
 
-func (p *Parser) LoadConfigFromSource(data []byte) (*Config, diag.Diagnostics) {
+func (p *Parser) LoadConfigFromSource(data []byte) (*Config, error) {
 	newData := os.Expand(string(data), p.getVariableValue)
 	config, diags := decodeConfig(strings.NewReader(newData))
 
@@ -34,10 +33,10 @@ func (p *Parser) LoadConfigFromSource(data []byte) (*Config, diag.Diagnostics) {
 	return config, diags
 }
 
-func (p *Parser) LoadConfigFile(path string) (*Config, diag.Diagnostics) {
-	contents, diags := p.LoadFile(path)
-	if diags.HasErrors() {
-		return nil, diags
+func (p *Parser) LoadConfigFile(path string) (*Config, error) {
+	contents, err := p.LoadFile(path)
+	if err != nil {
+		return nil, err
 	}
 	return p.LoadConfigFromSource(contents)
 }
@@ -119,7 +118,7 @@ func validateCloudQueryProviders(providers RequiredProviders) diag.Diagnostics {
 	return diags
 }
 
-func decodeConfig(r io.Reader) (*Config, diag.Diagnostics) {
+func decodeConfig(r io.Reader) (*Config, []gojsonschema.ResultError, error) {
 	var yc struct {
 		CloudQuery CloudQuery  `yaml:"cloudquery" json:"cloudquery"`
 		Providers  []*Provider `yaml:"providers" json:"providers"`
@@ -130,41 +129,32 @@ func decodeConfig(r io.Reader) (*Config, diag.Diagnostics) {
 	d := yaml.NewDecoder(r)
 	d.KnownFields(true)
 	if err := d.Decode(&yc); err != nil {
-		return nil, diag.FromError(err, diag.USER, diag.WithSummary("Failed to parse yaml"))
+		return nil, nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
 	schemaLoader := gojsonschema.NewBytesLoader(configSchemaYAML)
 	documentLoader := gojsonschema.NewGoLoader(yc)
 	result, err := gojsonschema.Validate(schemaLoader, documentLoader)
 	if err != nil {
-		return nil, diag.FromError(err, diag.USER, diag.WithSummary("Failed to validate config"))
+		return nil, nil, fmt.Errorf("failed to validate config: %w", err)
 	}
+
 	if !result.Valid() {
-		errs := result.Errors()
-		if len(errs) == 0 {
-			return nil, diag.FromError(errors.New("Failed to validate config with schema"), diag.USER, diag.WithSummary("Invalid configuration"))
-		}
-		var diags diag.Diagnostics
-		for _, e := range errs {
-			diags = diags.Add(
-				diag.FromError(errors.New(e.String()), diag.USER, diag.WithDetails("%s", e.Description()), diag.WithSummary("Config field %q has error of type %s", e.Field(), e.Type())),
-			)
-		}
-		return nil, diags
+		return nil, result.Errors(), nil
 	}
 
 	providers := yc.Providers
 	for _, p := range providers {
 		p.ConfigBytes, err = yaml.Marshal(p.Configuration)
 		if err != nil {
-			return nil, diag.FromError(err, diag.INTERNAL, diag.WithSummary("Configuration marshal failed"))
+			return nil, nil, fmt.Errorf("failed to marshal provider configuration: %w", err)
 		}
 	}
 
 	return &Config{
 		CloudQuery: yc.CloudQuery,
 		Providers:  providers,
-	}, nil
+	}, nil, nil
 }
 
 func validateConnection(connection *Connection) diag.Diagnostics {
