@@ -22,7 +22,7 @@ jobs:
           target: website/public/images/ # directory to look for images in
           dimensions: 90% # parameter to change size
           widthLimit: 1280 # max width to check
-          # heightLimit: 768 # max height to check
+          heightLimit: 1024 # max height to check
       - name: Commit changes
         uses: EndBug/add-and-commit@v4
         with:
